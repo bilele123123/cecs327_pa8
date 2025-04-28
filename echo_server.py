@@ -1,5 +1,4 @@
 import socket
-import os
 import psycopg2
 from psycopg2 import pool
 from dotenv import load_dotenv
@@ -14,70 +13,58 @@ from typing import Optional, Any
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# directly define the connection string
+# database connection string
 connection_string = "postgresql://neondb_owner:npg_YZPcTaL9X1uQ@ep-rough-forest-a6lx105f-pooler.us-west-2.aws.neon.tech/neondb?sslmode=require"
 
-# set up the connection pool
+# setup connection pool
 connection_pool = psycopg2.pool.SimpleConnectionPool(1, 10, connection_string)
 
-# get a connection from the pool
-connection = connection_pool.getconn()
-
-# do something with the connection
-cursor = connection.cursor()
-cursor.execute("SELECT * FROM sensor_readings_metadata")
-results = cursor.fetchall()
-print(results)
-
-# return the connection back to the pool
-connection_pool.putconn(connection)
-
 # unit conversion constants
-MOISTURE_TO_RH_CONVERSION = 1.5
-GALLONS_PER_LITER = 0.264172
-KWH_PER_WATT_HOUR = 0.001
+moisture_to_rh_conversion = 1.5
+gallons_per_liter = 0.264172
+kwh_per_watt_hour = 0.001
 
 @dataclass
-class DeviceMetadata:
+class device_metadata:
     device_id: str
     device_type: str
     data_source: str
     timezone: str
     unit_of_measure: str
     conversion_factor: float
-    column_7: str  # Add these for each additional column in the query result
+    column_7: str
     column_8: str
     column_9: str
     column_10: str
     column_11: str
     column_12: str
 
-class BinaryTreeNode:
+class binary_tree_node:
     def __init__(self, key: str, value: Any):
         self.key = key
         self.value = value
-        self.left: Optional[BinaryTreeNode] = None
-        self.right: Optional[BinaryTreeNode] = None
+        self.left: Optional[binary_tree_node] = None
+        self.right: Optional[binary_tree_node] = None
 
-class BinaryTree:
+class binary_tree:
     def __init__(self):
-        self.root: Optional[BinaryTreeNode] = None
+        self.root: Optional[binary_tree_node] = None
 
     def insert(self, key: str, value: Any):
         if not self.root:
-            self.root = BinaryTreeNode(key, value)
+            self.root = binary_tree_node(key, value)
             return
         
         current = self.root
         while True:
             if key < current.key:
                 if not current.left:
-                    current.left = BinaryTreeNode(key, value)
+                    current.left = binary_tree_node(key, value)
                     break
                 current = current.left
             else:
                 if not current.right:
-                    current.right = BinaryTreeNode(key, value)
+                    current.right = binary_tree_node(key, value)
                     break
                 current = current.right
 
@@ -93,36 +80,31 @@ class BinaryTree:
         return None
 
 # init device metadata tree
-device_metadata_tree = BinaryTree()
-
-def load_device_metadata():
-    conn = get_db_connection()
-    cur = conn.cursor()
-    try:
-        cur.execute("""
-            SELECT * FROM sensor_readings_metadata
-        """)
-        results = cur.fetchall()
-        
-        # Log the number of columns returned in the first result row
-        logger.info(f"Query returned {len(results[0])} columns.")  # Log column count
-        
-        for row in results:
-            logger.info(f"Row length: {len(row)}")  # Check if row length matches expected number of fields
-            metadata = DeviceMetadata(*row)  # This is where the error occurs if row length doesn't match
-            device_metadata_tree.insert(metadata.device_id, metadata)
-        logger.info("Device metadata loaded")
-    except Exception as e:
-        logger.error(f"Error loading metadata: {e}")
-    finally:
-        cur.close()
-        release_db_connection(conn)
+device_metadata_tree = binary_tree()
 
 def get_db_connection():
     return connection_pool.getconn()
 
 def release_db_connection(conn):
     connection_pool.putconn(conn)
+
+def load_device_metadata():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("select * from sensor_readings_metadata")
+        results = cur.fetchall()
+        
+        for row in results:
+            metadata = device_metadata(*row)
+            device_metadata_tree.insert(metadata.device_id, metadata)
+        
+        logger.info("device metadata loaded")
+    except Exception as e:
+        logger.error(f"error loading metadata: {e}")
+    finally:
+        cur.close()
+        release_db_connection(conn)
 
 def convert_to_pst(timestamp: datetime) -> datetime:
     pst = pytz.timezone('America/Los_Angeles')
@@ -132,12 +114,11 @@ def process_fridge_moisture_query():
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        # Assume 'fridge' data is contained in `sensor_readings_virtual` with payload data
         three_hours_ago = datetime.utcnow() - timedelta(hours=3)
         cur.execute("""
-            SELECT sr.assetUid, sr.payload, sr.time, sr.retain 
-            FROM sensor_readings_virtual sr
-            WHERE sr.topic = 'fridge/moisture' AND sr.time >= %s
+            select sr.assetUid, sr.payload, sr.time 
+            from sensor_readings_virtual sr
+            where sr.topic = 'fridge/moisture' and sr.time >= %s
         """, (three_hours_ago,))
         
         readings = cur.fetchall()
@@ -146,12 +127,10 @@ def process_fridge_moisture_query():
         
         total_rh = 0
         count = 0
-        for assetUid, payload, timestamp, retain in readings:
-            # Assuming 'payload' contains the moisture reading and possibly other relevant info
-            moisture = payload.get("moisture", 0)  # Adjust this depending on payload structure
+        for assetUid, payload, timestamp in readings:
+            moisture = payload.get("moisture", 0)
             if moisture:
-                # You could apply a conversion factor here if needed (similar to your original logic)
-                total_rh += moisture  # Example: directly adding moisture value
+                total_rh += moisture
                 count += 1
         
         if count > 0:
@@ -170,9 +149,9 @@ def process_dishwasher_water_query():
     cur = conn.cursor()
     try:
         cur.execute("""
-            SELECT sr.assetUid, sr.payload, sr.time
-            FROM sensor_readings_virtual sr
-            WHERE sr.topic = 'dishwasher/water' AND sr.time >= NOW() - INTERVAL '3 hours'
+            select sr.assetUid, sr.payload, sr.time
+            from sensor_readings_virtual sr
+            where sr.topic = 'dishwasher/water' and sr.time >= now() - interval '3 hours'
         """)
         
         readings = cur.fetchall()
@@ -182,8 +161,7 @@ def process_dishwasher_water_query():
         total_gallons = 0
         count = 0
         for assetUid, payload, timestamp in readings:
-            # Assuming 'payload' contains water consumption info
-            water = payload.get("water", 0)  # Adjust this depending on your actual data structure
+            water = payload.get("water", 0)
             if water:
                 total_gallons += water
                 count += 1
@@ -204,10 +182,10 @@ def process_electricity_comparison_query():
     cur = conn.cursor()
     try:
         cur.execute("""
-            SELECT sr.assetUid, sr.payload, sr.time, sr.topic
-            FROM sensor_readings_virtual sr
-            WHERE sr.topic IN ('refrigerator/power', 'dishwasher/power') 
-            AND sr.time >= NOW() - INTERVAL '1 day'  -- Adjust as needed for the timeframe
+            select sr.assetUid, sr.payload, sr.time, sr.topic
+            from sensor_readings_virtual sr
+            where sr.topic in ('refrigerator/power', 'dishwasher/power') 
+            and sr.time >= now() - interval '1 day'
         """)
         
         readings = cur.fetchall()
@@ -215,30 +193,20 @@ def process_electricity_comparison_query():
             return "no power data available"
         
         power_consumption = defaultdict(float)
-        
-        # Iterate over the readings and aggregate the power consumption for each device
         for assetUid, payload, timestamp, topic in readings:
-            # Extract power consumption from the payload (assuming 'power' is a key)
-            power = payload.get("power", 0)  # Adjust if the structure of payload is different
-            
+            power = payload.get("power", 0)
             if power:
                 power_consumption[assetUid] += power
         
-        # Now find the device with the highest power consumption
         if power_consumption:
             highest_consumer = max(power_consumption, key=power_consumption.get)
             total_power = power_consumption[highest_consumer]
-            # Optionally convert power to kWh if needed, for example by multiplying by a conversion factor
-            kwh = total_power * KWH_PER_WATT_HOUR  # If needed to convert to kWh (change constant if necessary)
-            
-            return f"device {highest_consumer} consumed the most power: {kwh:.1f} kWh"
-        else:
-            return "no valid power data"
-    
+            kwh = total_power * kwh_per_watt_hour
+            return f"device {highest_consumer} consumed the most power: {kwh:.1f} kwh"
+        return "no valid power data"
     except Exception as e:
         logger.error(f"error: {e}")
         return "error processing query"
-    
     finally:
         cur.close()
         release_db_connection(conn)

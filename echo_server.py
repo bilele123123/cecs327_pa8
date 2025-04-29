@@ -14,7 +14,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # database connection string
-connection_string = "postgresql://neondb_owner:npg_YZPcTaL9X1uQ@ep-rough-forest-a6lx105f-pooler.us-west-2.aws.neon.tech/neondb?sslmode=require"
+connection_string = "DATABASE_URL"
 
 # setup connection pool
 connection_pool = psycopg2.pool.SimpleConnectionPool(1, 10, connection_string)

@@ -1,7 +1,5 @@
 from datetime import datetime, timedelta
 from collections import defaultdict
-from dataclasses import dataclass
-from typing import Optional, Any
 from dotenv import load_dotenv
 from psycopg2 import pool
 
@@ -23,6 +21,7 @@ GALLONS_PER_LITTER = 0.264172
 MOISTURE_TO_RH = 1.5
 KWH_PER_WH = 0.001
 PST = pytz.timezone("America/Los_Angeles")
+
 # === Using simulated time because Dataniz usage expired, so we are using payload data from April 18th === #
 USE_SIMULATED_TIME = True
 SIMULATED_NOW = datetime.fromisoformat("2025-04-18T21:51:05+00:00")
@@ -32,82 +31,6 @@ def get_now():
 
 def three_hours_ago():
     return get_now() - timedelta(hours=3)
-
-# === Binary Tree & Metadata === #
-@dataclass
-class DeviceMetadata:
-    id: int
-    assetUid: str
-    parentAssetUid: Optional[str]
-    eventTypes: dict
-    mediaType: str
-    assetType: str
-    latitude: float
-    longitude: float
-    status: str
-    customAttributes: dict
-    createdAt: datetime
-    updatedAt: datetime
-
-class TreeNode:
-    def __init__(self, key: str, value: Any):
-        self.key = key
-        self.value = value
-        self.left = None
-        self.right = None
-
-class BinaryTree:
-    def __init__(self):
-        self.root = None
-
-    def insert(self, key: str, value: Any):
-        if not self.root:
-            self.root = TreeNode(key, value)
-            return
-        current = self.root
-
-        while True:
-            if key < current.key:
-                if not current.left:
-                    current.left = BinaryTree(key, value)
-                    break
-                current = current.left
-            else:
-                if not current.right:
-                    current.right = BinaryTree(key, value)
-                    break
-                current = current.right
-
-    def search(self, key: str):
-        current = self.root
-        while current:
-            if key == current.key:
-                return current.value
-            if key < current.key:
-                current = current.left
-            else:
-                current = current.right
-        return None
-
-device_metadata_tree = BinaryTree()
-
-def load_device_metadata():
-    conn = connection_pool.getconn()
-    cur = conn.cursor()
-    try:
-        cur.execute("SELECT * FROM fridge_data_metadata")
-        results = cur.fetchall()
-        
-        for row in results:
-            device_metadata_tree.insert(row[1], DeviceMetadata(*row)) # insert to row[1] with assertUid
-        logger.info("Fridge metadata loaded")
-
-    except Exception as e:
-        logger.error(f"Fridge metadata load error: {e}")
-    
-    finally:
-        cur.close()
-        connection_pool.putconn(conn) # returns connection object to be reused, avoidf overhead
 
 def convert_to_pst(timestamp: datetime) -> datetime:
     return timestamp.astimezone(PST)
@@ -224,10 +147,7 @@ def process_query(query: str) -> str:
         logger.error(f"error: {e}")
         return "error processing query"
 
-# load metadata before starting server
-load_device_metadata()
-
-# server setup
+# === Server Setup === #
 ip_address = "0.0.0.0"
 port_number = 1
 

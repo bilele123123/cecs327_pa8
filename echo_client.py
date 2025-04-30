@@ -27,11 +27,19 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
         while True: # sending multiple messages
             message_to_send = input("\nEnter your query: ") # prompt message
             
+            match message_to_send:
+                case "1":
+                    message_to_send = VALID_QUERIES[0]
+                case "2":
+                    message_to_send = VALID_QUERIES[1]
+                case "3":
+                    message_to_send = VALID_QUERIES[2]
+
             if not is_valid_query(message_to_send):
                 print("\nSorry, this query cannot be processed. Please try one of the following:")
                 display_valid_queries()
                 continue
-                
+            
             client_socket.sendall(message_to_send.encode()) 
             response = client_socket.recv(1024).decode()
             print(f"\nServer response: {response}") # display server response

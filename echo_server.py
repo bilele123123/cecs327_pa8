@@ -35,103 +35,89 @@ def three_hours_ago():
 def convert_to_pst(timestamp: datetime) -> datetime:
     return timestamp.astimezone(PST)
 
-# === Query Handlers ==== #
-def process_fridge_moisture_query():
+# === Caching using hashmaps for easy and fast look up === #
+fridge_data = {}
+dishwasher_data = {}
+
+def load_sensor_data():
+    global fridge_data, dishwasher_data
     conn = connection_pool.getconn()
     cur = conn.cursor()
-    try:
-        cur.execute("""
-                    SELECT payload, time FROM fridge_data_virtual
-                    WHERE time >= %s
-                    """, (three_hours_ago(),))
-        rows = cur.fetchall()
 
-        total = 0
-        count = 0
-        
-        for payload, _ in rows:
+    try:
+        # Load fridge data and store in fridge map
+        cur.execute("SELECT payload, time FROM fridge_data_virtual")
+        fridge_data = {time: payload for payload, time in cur.fetchall()}
+
+        # Load dishwasher data and store
+        cur.execute("SELECT payload, time FROM dishwasher_data_virtual")
+        dishwasher_data = {time: payload for payload, time in cur.fetchall()}
+
+        logger.info("Sensor data loaded into memory")
+
+    except Exception as e:
+        logger.error(f"Error loading sensor data: {e}")
+
+    finally:
+        cur.close()
+        connection_pool.putconn(conn)
+
+# === Query Handlers ==== #
+def process_fridge_moisture_query():
+    total = 0
+    count = 0
+    cutoff = three_hours_ago()
+
+    for time, payload in fridge_data.items():
+        if time >= cutoff:
             moisture = payload.get("DHT11 - fridge_moisture_sensor")
             if moisture:
                 total += float(moisture) * MOISTURE_TO_RH
                 count += 1
-            
-        if count == 0:
-            return "No recent fridge moisture data"
-        return f"Average fridge moisture: {total / count:.1f}% RH"
 
-    except Exception as e:
-        return f"Error getting fridge data: {e}"
-    
-    finally:
-        cur.close()
-        connection_pool.putconn(conn)
+    if count == 0:
+        return "No recent fridge moisture data"
+    return f"Average fridge moisture: {total / count:.1f}% RH"
 
 def process_dishwasher_water_query():
-    conn = connection_pool.getconn()
-    cur = conn.cursor()
-    
-    try:
-        cur.execute("""
-            SELECT payload, time FROM dishwasher_data_virtual
-            WHERE time >= %s
-            """, (three_hours_ago(),))
-        
-        rows = cur.fetchall()
-        total_gallons = 0
-        count = 0
+    total_gallons = 0
+    count = 0
+    cutoff = three_hours_ago()
 
-        for payload, _ in rows:
+    for time, payload in dishwasher_data.items():
+        if time >= cutoff:
             water = payload.get("dishwasher_water_flow")
             if water:
                 total_gallons += float(water) * GALLONS_PER_LITTER
                 count += 1
-        
-        if count == 0:
-            return "No recent dishwasher water data"
 
-        return f"Average dishwasher water: {total_gallons / count:.2f} gallons"
-    
-    except Exception as e:
-        return "Dishwasher query fail"
-    
-    finally:
-        cur.close()
-        connection_pool.putconn(conn)
+    if count == 0:
+        return "No recent dishwasher water data"
+    return f"Average dishwasher water: {total_gallons / count:.2f} gallons"
 
 def process_electricity_comparison_query():
-    conn = connection_pool.getconn()
-    cur = conn.cursor()
+    power_consumption = defaultdict(float)
+    cutoff = three_hours_ago()
 
-    try:
-        cur.execute("""
-            SELECT 'fridge' AS device, payload FROM fridge_data_virtual
-            UNION ALL
-            SELECT 'dishwasher', payload FROM dishwasher_data_virtual
-        """)
-
-        rows = cur.fetchall()
-        
-        if not rows:
-            return "no power data available"
-        
-        power_consumption = defaultdict(float)
-        for device, payload in rows:
-            power = payload.get("fridge_ammeter") if device == "fridge" else payload.get("dishwasher_ammeter")
+    for time, payload in fridge_data.items():
+        if time >= cutoff:
+            power = payload.get("fridge_ammeter")
             if power:
-                power_consumption[device] += float(power)
+                power_consumption["fridge"] += float(power)
 
-        if not power_consumption:
-            return "No electricity data available"
+    for time, payload in dishwasher_data.items():
+        if time >= cutoff:
+            power = payload.get("dishwasher_ammeter")
+            if power:
+                power_consumption["dishwasher"] += float(power)
 
-        top_device = max(power_consumption, key=power_consumption.get)
-        kwh = power_consumption[top_device] * KWH_PER_WH
-        return f"{top_device.capitalize()} used the most electricity: {kwh:.2f} kWh"
+    if not power_consumption:
+        return "No electricity data available"
 
-    except Exception as e:
-        return f"Error getting data for fridge and dishwaser : {e}"
-    finally:
-        cur.close()
-        connection_pool.putconn(conn)
+    top_device = max(power_consumption, key=power_consumption.get)
+    kwh = power_consumption[top_device] * KWH_PER_WH
+    return f"{top_device.capitalize()} used the most electricity: {kwh:.2f} kWh"
+
 
 def process_query(query: str) -> str:
     try:
@@ -150,6 +136,7 @@ def process_query(query: str) -> str:
 # === Server Setup === #
 ip_address = "0.0.0.0"
 port_number = 1
+load_sensor_data() # load sensor data caches so we don't have to keep requerying the db
 
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
     server_socket.bind((ip_address, port_number))

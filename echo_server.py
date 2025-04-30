@@ -1,9 +1,9 @@
-from psycopg2 import pool
-from dotenv import load_dotenv
 from datetime import datetime, timedelta
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Optional, Any
+from dotenv import load_dotenv
+from psycopg2 import pool
 
 import psycopg2
 import logging
@@ -23,6 +23,15 @@ GALLONS_PER_LITTER = 0.264172
 MOISTURE_TO_RH = 1.5
 KWH_PER_WH = 0.001
 PST = pytz.timezone("America/Los_Angeles")
+# === Using simulated time because Dataniz usage expired, so we are using payload data from April 18th === #
+USE_SIMULATED_TIME = True
+SIMULATED_NOW = datetime.fromisoformat("2025-04-18T21:51:05+00:00")
+
+def get_now():
+    return SIMULATED_NOW if USE_SIMULATED_TIME else datetime.now()
+
+def three_hours_ago():
+    return get_now() - timedelta(hours=3)
 
 # === Binary Tree & Metadata === #
 @dataclass
@@ -44,12 +53,12 @@ class TreeNode:
     def __init__(self, key: str, value: Any):
         self.key = key
         self.value = value
-        self.left: None
-        self.right: None
+        self.left = None
+        self.right = None
 
 class BinaryTree:
     def __init__(self):
-        self.root: None
+        self.root = None
 
     def insert(self, key: str, value: Any):
         if not self.root:
@@ -108,13 +117,16 @@ def process_fridge_moisture_query():
     conn = connection_pool.getconn()
     cur = conn.cursor()
     try:
-        cur.execute("""SELECT payload, time FROM fridge_data_virtual""",)
+        cur.execute("""
+                    SELECT payload, time FROM fridge_data_virtual
+                    WHERE time >= %s
+                    """, (three_hours_ago(),))
         rows = cur.fetchall()
 
         total = 0
         count = 0
         
-        for payload in rows:
+        for payload, _ in rows:
             moisture = payload.get("DHT11 - fridge_moisture_sensor")
             if moisture:
                 total += float(moisture) * MOISTURE_TO_RH
@@ -131,83 +143,81 @@ def process_fridge_moisture_query():
         cur.close()
         connection_pool.putconn(conn)
 
-# def process_dishwasher_water_query():
-#     conn = get_db_connection()
-#     cur = conn.cursor()
-#     try:
-#         cur.execute("""
-#             select sr.assetUid, sr.payload, sr.time
-#             from sensor_readings_virtual sr
-#             where sr.topic = 'dishwasher/water' and sr.time >= now() - interval '3 hours'
-#         """)
+def process_dishwasher_water_query():
+    conn = connection_pool.getconn()
+    cur = conn.cursor()
+    
+    try:
+        cur.execute("""
+            SELECT payload, time FROM dishwasher_data_virtual
+            WHERE time >= %s
+            """, (three_hours_ago(),))
         
-#         readings = cur.fetchall()
-#         if not readings:
-#             return "no water data available"
-        
-#         total_gallons = 0
-#         count = 0
-#         for assetUid, payload, timestamp in readings:
-#             water = payload.get("water", 0)
-#             if water:
-#                 total_gallons += water
-#                 count += 1
-        
-#         if count > 0:
-#             avg_gallons = total_gallons / count
-#             return f"average water: {avg_gallons:.1f} gallons"
-#         return "no valid water data"
-#     except Exception as e:
-#         logger.error(f"error: {e}")
-#         return "error processing query"
-#     finally:
-#         cur.close()
-#         release_db_connection(conn)
+        rows = cur.fetchall()
+        total_gallons = 0
+        count = 0
 
-# def process_electricity_comparison_query():
-#     conn = get_db_connection()
-#     cur = conn.cursor()
-#     try:
-#         cur.execute("""
-#             select sr.assetUid, sr.payload, sr.time, sr.topic
-#             from sensor_readings_virtual sr
-#             where sr.topic in ('refrigerator/power', 'dishwasher/power') 
-#             and sr.time >= now() - interval '1 day'
-#         """)
+        for payload, _ in rows:
+            water = payload.get("dishwasher_water_flow")
+            if water:
+                total_gallons += float(water) * GALLONS_PER_LITTER
+                count += 1
         
-#         readings = cur.fetchall()
-#         if not readings:
-#             return "no power data available"
+        if count == 0:
+            return "No recent dishwasher water data"
+
+        return f"Average dishwasher water: {total_gallons / count:.2f} gallons"
+    
+    except Exception as e:
+        return "Dishwasher query fail"
+    
+    finally:
+        cur.close()
+        connection_pool.putconn(conn)
+
+def process_electricity_comparison_query():
+    conn = connection_pool.getconn()
+    cur = conn.cursor()
+
+    try:
+        cur.execute("""
+            SELECT 'fridge' AS device, payload FROM fridge_data_virtual
+            UNION ALL
+            SELECT 'dishwasher', payload FROM dishwasher_data_virtual
+        """)
+
+        rows = cur.fetchall()
         
-#         power_consumption = defaultdict(float)
-#         for assetUid, payload, timestamp, topic in readings:
-#             power = payload.get("power", 0)
-#             if power:
-#                 power_consumption[assetUid] += power
+        if not rows:
+            return "no power data available"
         
-#         if power_consumption:
-#             highest_consumer = max(power_consumption, key=power_consumption.get)
-#             total_power = power_consumption[highest_consumer]
-#             kwh = total_power * kwh_per_watt_hour
-#             return f"device {highest_consumer} consumed the most power: {kwh:.1f} kwh"
-#         return "no valid power data"
-#     except Exception as e:
-#         logger.error(f"error: {e}")
-#         return "error processing query"
-#     finally:
-#         cur.close()
-#         release_db_connection(conn)
+        power_consumption = defaultdict(float)
+        for device, payload in rows:
+            power = payload.get("fridge_ammeter") if device == "fridge" else payload.get("dishwasher_ammeter")
+            if power:
+                power_consumption[device] += float(power)
+
+        if not power_consumption:
+            return "No electricity data available"
+
+        top_device = max(power_consumption, key=power_consumption.get)
+        kwh = power_consumption[top_device] * KWH_PER_WH
+        return f"{top_device.capitalize()} used the most electricity: {kwh:.2f} kWh"
+
+    except Exception as e:
+        return f"Error getting data for fridge and dishwaser : {e}"
+    finally:
+        cur.close()
+        connection_pool.putconn(conn)
 
 def process_query(query: str) -> str:
     try:
-        if query == "What is the average moisture inside my kitchen fridge in the past three hours?" or '1':
+        if query == "1" or query == "What is the average moisture inside my kitchen fridge in the past three hours?":
             return process_fridge_moisture_query()
-        elif query == "What is the average water consumption per cycle in my smart dishwasher?" or '2':
-            return "query 2 test"
-            # return process_dishwasher_water_query()
-        elif query == "Which device consumed more electricity among my three IoT devices (two refrigerators and a dishwasher)?" or '3':
-            return "query 3 test"
-            # return process_electricity_comparison_query()
+        elif query == "2" or query == "What is the average water consumption per cycle in my smart dishwasher?":
+            return process_dishwasher_water_query()
+        elif query == "1" or query == "Which device consumed more electricity among my three IoT devices (two refrigerators and a dishwasher)?":
+            return process_electricity_comparison_query()
         else:
             return "invalid query"
     except Exception as e:

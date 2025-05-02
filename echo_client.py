@@ -4,7 +4,8 @@ import socket
 VALID_QUERIES = [
     "What is the average moisture inside my kitchen fridge in the past three hours?",
     "What is the average water consumption per cycle in my smart dishwasher?",
-    "Which device consumed more electricity among my three IoT devices (two refrigerators and a dishwasher)?"
+    "Which device consumed more electricity among my three IoT devices (two refrigerators and a dishwasher)?",
+    "Reload data",
 ]
 
 def display_valid_queries():
@@ -34,6 +35,8 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
                     message_to_send = VALID_QUERIES[1]
                 case "3":
                     message_to_send = VALID_QUERIES[2]
+                case "4":
+                    message_to_send = VALID_QUERIES[3]
 
             if not is_valid_query(message_to_send):
                 print("\nSorry, this query cannot be processed. Please try one of the following:")

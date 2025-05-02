@@ -40,6 +40,12 @@ dishwasher_data = {}
 # === Loading sensor data into maps === #
 def load_sensor_data():
     global fridge_data, fridge_clone_data, dishwasher_data
+    
+    # reloading hashmap and emptying out cache
+    fridge_data = {}
+    fridge_clone_data = {}
+    dishwasher_data = {}
+    
     conn = connection_pool.getconn()
     cur = conn.cursor()
 

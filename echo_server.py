@@ -23,12 +23,14 @@ MOISTURE_TO_RH = 1.5
 KWH_PER_WH = 0.001
 PST = pytz.timezone("America/Los_Angeles")
 
-# === Using simulated time because Dataniz usage expired, so we are using payload data from April 18th === #
+# === Helper Function for Time Conversion === #
 def three_hours_ago():
     return datetime.now(timezone.utc) - timedelta(hours=3)
 
 def convert_to_pst(timestamp: datetime) -> datetime:
-    return timestamp.astimezone(PST)
+    timestamp = timestamp.astimezone(PST)
+    formatted_time = timestamp.strftime("%Y-%m-%d %H:%M PST")
+    return formatted_time
 
 # === Caching using hashmaps for easy and fast look up === #
 fridge_data = {}
@@ -93,21 +95,23 @@ def process_fridge_moisture_query():
 
     if count == 0:
         return "No recent fridge moisture data"
-    return f"Average fridge moisture: {total / count:.1f}% RH"
+    return f"Average fridge moisture: {total / count:.1f}% RH (as of 3 hours ago from {convert_to_pst(datetime.now(PST))})"
 
 def process_dishwasher_water_query():
     total_gallons = 0
     count = 0
+    cutoff = three_hours_ago()
 
     for time, payload in dishwasher_data.items():
-        water = payload.get("water flow sensor")
-        if water:
-            total_gallons += float(water) * GALLONS_PER_LITTER
-            count += 1
+        if time >= cutoff:
+            water = payload.get("water flow sensor")
+            if water:
+                total_gallons += float(water) * GALLONS_PER_LITTER
+                count += 1
 
     if count == 0:
         return "No recent dishwasher water data"
-    return f"Average dishwasher water: {total_gallons / count:.2f} gallons"
+    return f"Average dishwasher water: {total_gallons / count:.2f} gallons (as of 3 hours ago from {convert_to_pst(datetime.now(PST))})"
 
 def process_electricity_comparison_query():
     power_consumption = defaultdict(float)
@@ -139,7 +143,7 @@ def process_electricity_comparison_query():
 
     top_device = max(power_consumption, key=power_consumption.get)
     kwh = power_consumption[top_device] * KWH_PER_WH
-    return f"{top_device.capitalize()} used the most electricity: {kwh:.2f} kWh"
+    return f"{top_device.capitalize()} used the most electricity: {kwh:.2f} kWh (as of 3 hours ago from {convert_to_pst(datetime.now(PST))})"
 
 
 def process_query(query: str) -> str:
